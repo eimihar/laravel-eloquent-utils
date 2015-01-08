@@ -46,10 +46,10 @@ class EloquentSchemaBuilder
 
 		$capsule->addConnection(array(
 		    'driver'    => 'mysql',
-		    'host'      => $host,
-		    'database'  => $database,
-		    'username'  => $user,
-		    'password'  => $pass,
+		    'host'      => $config['host'],
+		    'database'  => $config['database'],
+		    'username'  => $config['user'],
+		    'password'  => $config['pass'],
 		    'charset'   => 'utf8',
 		    'collation' => 'utf8_unicode_ci',
 		    'prefix'    => ''
@@ -68,6 +68,7 @@ class EloquentSchemaBuilder
 	public function execute($schema)
 	{
 		$aliases	= &$this->aliases;
+		$builder	= $this->getBuilder();
 
 		if(is_array($schema))
 		{
@@ -91,8 +92,9 @@ class EloquentSchemaBuilder
 				if(strpos($tname, ":") !== false)
 					list($tname,$engine)	= explode(":",$tname);
 
+				$action	= $builder->hasTable($tname)?"table":"create";
 
-				$this->getBuilder()->create($tname,function($table) use($tname, $columns, $aliases, $engine)
+				$builder->$action($tname,function($table) use($tname, $columns, $aliases, $engine, $builder)
 				{
 					if($engine)
 						$table->engine = $engine;
@@ -102,6 +104,9 @@ class EloquentSchemaBuilder
 						## resolve type.
 						$type	= isset($aliases[$type])?$aliases[$type]:$type;
 
+						if($builder->hasColumn($tname,$column))
+							continue;
+
 						## create;
 						if(!is_numeric($column))
 						{
@@ -109,12 +114,50 @@ class EloquentSchemaBuilder
 						}
 						else
 						{
-							if($type == "timestamps")
-								$table->timestamps();
+							if(!$builder->hasColumn($tname,"created_at") && !$builder->hasColumn($tname,"updated_at"))
+							{
+								if($type == "timestamps")
+									$table->timestamps();
+							}
 						}
-
 					}
 				});
+
+				## existence deletion
+				if($builder->hasTable($tname))
+				{
+					$tableColumns	= $builder->getColumnListing($tname);
+
+					## compare with schema.
+					$nonExists	= Array();
+					foreach($tableColumns as $column)
+					{
+						if(!isset($columns[$column]) && !in_array($column, Array("created_at","updated_at")))
+							$nonExists[]	= $column;
+					}
+
+					if(count($nonExists) > 0)
+					{
+						echo "Unable to find below column(s) in your schema for table : $tname :\n";
+						foreach($nonExists as $col)
+						{
+							echo "- ".$col."\n";
+						}
+						echo "Do you want to drop them.?\n";
+
+						$handle = fopen ("php://stdin","r");
+						$line = fgets($handle);
+
+						if(trim($line) == "y")
+						{
+							$builder->table($tname,function($table) use($nonExists)
+							{
+								$table->dropColumn($nonExists);
+							});
+							echo "deleted!\n";
+						}
+					}
+				}
 			}
 		}
 		## use direct eloquent builder instead, given the builder.
